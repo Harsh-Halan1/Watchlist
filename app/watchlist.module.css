@@ -20,6 +20,28 @@
 .primary:hover:not(:disabled) { background: var(--accent-hover); }
 .secondary { background: transparent; color: var(--ink); }
 .secondary:hover:not(:disabled) { background: var(--hover); }
+.views { display: flex; gap: .45rem; margin-bottom: 1rem; }
+.views button, .recommendationFilters .secondary, .recommendationCard .actions button, .markLow {
+  display: inline-flex; align-items: center; justify-content: center; gap: .45rem;
+}
+.views button[aria-pressed='true'] { background: var(--selected); color: var(--accent); border-color: var(--accent); font-weight: 700; }
+.recommendationFilters, .airingFilters { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
+.recommendationFilters { margin-top: .65rem; }
+.filterChip {
+  display: inline-flex; align-items: center; gap: .45rem; min-height: 44px; padding: .45rem .75rem;
+  border: 1px solid var(--control); border-radius: 999px; background: transparent; color: var(--ink);
+  cursor: pointer; font-size: .875rem;
+}
+.filterChip:hover { background: var(--hover); }
+.filterChip[aria-pressed='true'] {
+  background: var(--selected); color: var(--accent); border-color: var(--accent); font-weight: 700;
+}
+.sourceTitle { color: var(--ink); }
+.markLow {
+  justify-self: start; padding: .35rem .5rem; min-height: 44px; border: 0; border-radius: .25rem;
+  background: transparent; color: var(--accent); font-size: .875rem; text-align: start;
+}
+.markLow:hover, .markLow[aria-pressed='true'] { background: var(--selected); }
 .layout { display: grid; grid-template-columns: 168px minmax(0, 1fr); align-items: start; gap: clamp(1.25rem, 3vw, 2.4rem); }
 .filters { display: grid; gap: .25rem; padding-top: .45rem; border-top: 1px solid var(--ink); }
 .filters button {
@@ -49,6 +71,11 @@
   width: 72px; height: 101px; object-fit: cover; display: grid; place-items: center; border-radius: .18rem;
   background: var(--cover); color: var(--accent); font: 1.55rem Georgia, serif;
 }
+.posterButton {
+  display: block; width: fit-content; padding: 0; border: 0; border-radius: .18rem;
+  background: transparent; cursor: zoom-in;
+}
+.posterButton:hover { box-shadow: 0 0 0 2px var(--accent); }
 .progress { width: min(100%, 12rem); height: 5px; margin-block: .12rem .2rem; accent-color: var(--accent); }
 .actions { flex-wrap: wrap; gap: .45rem; }
 .actions .primary { min-width: 50px; }
@@ -58,10 +85,14 @@
 .search label { display: block; margin-bottom: .35rem; font-weight: 700; }
 .search input { flex: 1; min-width: 0; }
 .search .result {
-  margin-top: .5rem; padding: .5rem 0; border: 0; border-bottom: 1px solid var(--line); background: transparent;
-  color: var(--ink); width: 100%; text-align: left; display: flex; align-items: center; gap: .7rem;
+  margin-top: .5rem; padding: .5rem 0; border-bottom: 1px solid var(--line);
+  display: flex; align-items: center; gap: .7rem;
 }
-.search .result:hover { background: var(--hover); }
+.resultTitle {
+  flex: 1; min-width: 0; min-height: 46px; padding: .25rem; border: 0; border-radius: .25rem;
+  background: transparent; color: var(--ink); text-align: start; overflow-wrap: anywhere;
+}
+.resultTitle:hover:not(:disabled) { background: var(--hover); }
 .search .result small { display: block; }
 .search .cover { flex: 0 0 auto; width: 34px; height: 46px; }
 .muted, .heading p, .empty p { color: var(--muted); }
@@ -70,6 +101,14 @@
 .dialog::backdrop { background: var(--backdrop); }
 .dialogHeading { align-items: start; margin-bottom: .55rem; }
 .dialogHeading h2 { font-size: 1.6rem; line-height: 1.15; }
+.previewDialog { width: min(100% - 2rem, 760px); max-height: calc(100dvh - 2rem); overflow: auto; }
+.previewDialog .dialogHeading { margin-bottom: 1rem; }
+.previewDialog .dialogHeading h2 { overflow-wrap: anywhere; }
+.previewLayout { display: flex; flex-wrap: wrap; align-items: start; gap: 1.2rem; }
+.enlargedPoster { width: min(100%, 220px); max-height: 55dvh; object-fit: contain; object-position: top; border-radius: .25rem; }
+.previewInfo { flex: 1 1 250px; min-width: 0; display: grid; gap: .65rem; justify-items: start; }
+.previewInfo h3 { margin-top: .25rem; font-size: 1rem; }
+.synopsis { white-space: pre-line; overflow-wrap: anywhere; }
 .edit { display: grid; gap: .75rem; margin-top: 1rem; }
 .edit label { display: grid; gap: .25rem; font-weight: 650; }
 .edit button { justify-self: start; }
@@ -104,8 +143,21 @@
   }
   .section + .section { margin-top: 1.5rem; }
   .card { grid-template-columns: 57px minmax(0, 1fr); gap: .55rem .8rem; align-items: start; }
-  .card .cover { width: 57px; height: 80px; grid-row: span 2; }
+  .card .cover { width: 57px; height: 80px; }
+  .card .posterButton { grid-row: span 2; }
+  .enlargedPoster { margin-inline: auto; }
   .card .actions { grid-column: 2; }
+  .views button, .recommendationFilters button, .recommendationCard .actions button, .markLow {
+    position: relative; justify-content: center; width: 44px; min-height: 44px; padding: 0;
+  }
+  .recommendationCard {
+    grid-template-columns: 57px minmax(0, 1fr) 44px;
+    gap: .55rem; padding-block: .6rem;
+  }
+  .recommendationCard .posterButton { grid-row: auto; }
+  .recommendationCard .actions { grid-column: 3; }
+  .recommendationCard .cardInfo { gap: .15rem; }
+  .fanserviceRow { display: flex; flex-wrap: wrap; align-items: center; gap: 0 .25rem; }
 }
 @media (max-width: 419px) {
   .accountName { position: absolute; width: 1px; height: 1px; clip-path: inset(50%); }

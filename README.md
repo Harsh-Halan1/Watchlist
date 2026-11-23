@@ -23,6 +23,14 @@ Use the sun or moon button in the header to switch themes. The app starts with y
 - If AniList's schedule is missing or stale, you can keep or lower your saved count and change the watch status. If you previously saved a count above the airing limit, use **Edit** to correct it.
 - When AniList marks a title as finished and you have watched every episode, it appears under **Completed**. Saving that progress also records **Completed** on AniList. For older fully watched entries, open **Edit** and save to sync the status back to AniList. Caught-up airing shows stay in their current category.
 
+## Find recommendations
+
+Open **For You** after connecting AniList. Picks come from community recommendations for up to six titles you’ve started or completed. The tracker prioritizes higher personal scores and skips titles you rated under 70 out of 100, dropped titles, and titles you haven’t started. It excludes adult titles and anything already on your watchlist. Use **Refresh picks** after updating your AniList history or ratings.
+
+Use **Airing now** or **Finished airing** to filter by AniList’s release status. AniList tags can flag sexual content, but a missing tag leaves the fanservice level unknown. If you know a pick has low fanservice, mark it on its card. **Low fanservice** shows those marks on the current browser.
+
+Select a poster in the watchlist, search results, or **For You** to see a larger image, genres, the AniList community score, and the synopsis when available. Choose **Read more** to expand a long synopsis.
+
 ## Verify locally
 
 Set `WATCHLIST_DEMO=1` in `.env.local` and restart. In **Continue Watching**, Overgeared starts at 8 watched and 9 aired. Click **+1** once and confirm the card says **Caught Up**. Open **Edit** and try to save 10. The form should block the save. The **Missing schedule** entry lets you check how the app displays unavailable schedule data. Demo changes reset on restart.

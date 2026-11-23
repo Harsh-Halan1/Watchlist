@@ -14,9 +14,31 @@ type Media = {
 type Progress = { progress: number; status: Status; updatedAt: number };
 type Entry = Progress & { media: Media };
 type Details = Media & { mediaListEntry?: Progress | null };
+type MediaPreview = {
+  coverImage?: { extraLarge?: string | null } | null;
+  genres?: string[] | null;
+  averageScore?: number | null;
+  description?: string | null;
+};
+type AiringFilter = 'all' | 'RELEASING' | 'FINISHED';
+const airingFilters: { value: AiringFilter; label: string; icon: keyof typeof icons }[] = [
+  { value: 'all', label: 'Any status', icon: 'status' },
+  { value: 'RELEASING', label: 'Airing now', icon: 'watching' },
+  { value: 'FINISHED', label: 'Finished airing', icon: 'completed' },
+];
+type Fanservice = 'unknown' | 'flagged' | 'low';
+type Recommendation = { media: Media; because: Media['title']; fanservice: Fanservice };
+type RecommendationResult = { hasSeeds: boolean; items: Recommendation[] };
+const fanserviceLabels: Record<Fanservice, string> = {
+  unknown: 'Fanservice unknown', flagged: 'AniList flags sexual content', low: 'Low fanservice',
+};
 type Session = { demo: boolean; configured: boolean; signedIn: boolean; privateMode: boolean; name?: string };
 const icons = {
   all: 'M4 6h16M4 12h16M4 18h16',
+  status: 'M4 7h16M7 12h10m-7 5h4',
+  sparkle: 'M12 3l2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5L12 3Z',
+  shield: 'M12 3l7 3v5c0 4-3 7-7 10-4-3-7-6-7-10V6l7-3Zm-3 9 2 2 4-4',
+  add: 'M12 5v14M5 12h14',
   watching: 'm8 5 12 7-12 7V5Z',
   planning: 'M6 4h12v17l-6-4-6 4V4Z',
   completed: 'm5 12 4 4L19 6',
@@ -41,11 +63,19 @@ function Icon({ name }: { name: keyof typeof icons }) {
   </svg>;
 }
 
+function ControlLabel({ icon, children }: { icon: keyof typeof icons; children: string }) {
+  return <><Icon name={icon} /><span className={styles.compactLabel}>{children}</span></>;
+}
+
 function displayStatus(entry: Entry): Status {
   return isFullyWatched(entry.media, entry.progress) ? 'COMPLETED' : entry.status;
 }
 
-const displayName = (media: Media) => media.title.english ?? media.title.romaji ?? media.title.native ?? 'Untitled';
+const titleName = (title: Media['title']) => title.english ?? title.romaji ?? title.native ?? 'Untitled';
+const displayName = (media: Media) => titleName(media.title);
+const episodeCount = (media: Media) => media.episodes != null && media.episodes > 0
+  ? media.episodes + (media.episodes === 1 ? ' episode' : ' episodes')
+  : 'Episode count unknown';
 
 async function api<T>(path: string, input?: object): Promise<T> {
   const response = await fetch(path, input ? { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -60,6 +90,65 @@ function Cover({ media }: { media: Media }) {
   const cover = media.coverImage?.large;
   return cover ? <img className={styles.cover} src={cover} alt="" loading="lazy" />
     : <span className={styles.cover} aria-hidden="true">{displayName(media).slice(0, 1)}</span>;
+}
+
+function PosterButton({ media, onPreview }: { media: Media; onPreview: (media: Media) => void }) {
+  return <button type="button" className={styles.posterButton} aria-haspopup="dialog"
+    aria-label={'Preview ' + displayName(media)} onClick={() => onPreview(media)}>
+    <Cover media={media} />
+  </button>;
+}
+
+function descriptionText(html: string) {
+  const template = document.createElement('template');
+  template.innerHTML = html.replace(/<br\s*\/?>|<\/p>/gi, '\n');
+  return (template.content.textContent ?? '').trim().replace(/\n\s*\n/g, '\n\n');
+}
+
+function PosterPreview({ media, onClose }: { media: Media; onClose: () => void }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [details, setDetails] = useState<MediaPreview | null>(null);
+  const [error, setError] = useState('');
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    if (!dialog.current?.open) dialog.current?.showModal();
+    let active = true;
+    api<MediaPreview>('/api/media?id=' + media.id).then(result => {
+      if (active) setDetails({ ...result, description: descriptionText(result.description ?? '') });
+    }).catch(failure => {
+      if (active) setError(errorText(failure));
+    });
+    return () => { active = false; };
+  }, [media]);
+
+  const synopsis = details?.description ?? '';
+  const isLong = synopsis.length > 320;
+  const preview = isLong ? synopsis.slice(0, 320).replace(/\s+\S*$/, '') + '…' : synopsis;
+  const poster = details?.coverImage?.extraLarge ?? media.coverImage?.large;
+  return <dialog ref={dialog} className={`${styles.dialog} ${styles.previewDialog}`}
+    aria-labelledby="poster-preview-title" onClose={onClose}>
+      <div className={styles.dialogHeading}>
+        <h2 id="poster-preview-title">{displayName(media)}</h2>
+        <button type="button" className={styles.secondary} aria-label="Close preview" autoFocus
+          onClick={() => dialog.current?.close()}>Close</button>
+      </div>
+      <div className={styles.previewLayout}>
+        {poster && <img className={styles.enlargedPoster} src={poster} alt={'Poster for ' + displayName(media)} />}
+        <div className={styles.previewInfo}>
+          {error ? <p role="alert">{error}</p> : !details ? <p role="status">Loading anime details…</p> : <>
+            {details.averageScore != null && <p><strong>AniList score</strong> {details.averageScore}/100</p>}
+            {!!details.genres?.length && <p><strong>Genres</strong> {details.genres.join(', ')}</p>}
+            <h3>Synopsis</h3>
+            <p id="poster-synopsis" className={styles.synopsis}>{(expanded ? synopsis : preview) || 'No synopsis on AniList yet.'}</p>
+            {isLong && <button type="button" className={styles.secondary} aria-expanded={expanded}
+              aria-controls="poster-synopsis" onClick={() => setExpanded(value => !value)}>
+              {expanded ? 'Read less' : 'Read more'}
+            </button>}
+          </>}
+        </div>
+      </div>
+  </dialog>;
 }
 
 function ThemeToggle() {
@@ -90,6 +179,13 @@ export default function Watchlist() {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('All');
+  const [view, setView] = useState<'watchlist' | 'recommendations'>('watchlist');
+  const [recommendations, setRecommendations] = useState<RecommendationResult | null>(null);
+  const [recommendationError, setRecommendationError] = useState('');
+  const [loadingRecommendations, setLoadingRecommendations] = useState(false);
+  const [airingFilter, setAiringFilter] = useState<AiringFilter>('all');
+  const [lowOnly, setLowOnly] = useState(false);
+  const [lowTitles, setLowTitles] = useState<number[]>([]);
   const [notice, setNotice] = useState('');
   const [editError, setEditError] = useState('');
   const [error, setError] = useState('');
@@ -97,6 +193,7 @@ export default function Watchlist() {
   const [matches, setMatches] = useState<Media[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [selected, setSelected] = useState<Details | null>(null);
+  const [preview, setPreview] = useState<Media | null>(null);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState<number | null>(null);
   const [draft, setDraft] = useState('0');
@@ -106,12 +203,33 @@ export default function Watchlist() {
   async function loadList() {
     setLoading(true);
     setError('');
-    try { setEntries(await api<Entry[]>('/api/watchlist')); }
+    try {
+      setEntries(await api<Entry[]>('/api/watchlist'));
+      setRecommendations(null);
+    }
     catch (failure) { setError(errorText(failure)); }
     finally { setLoading(false); }
   }
 
+  async function loadRecommendations() {
+    setLoadingRecommendations(true);
+    setRecommendationError('');
+    try { setRecommendations(await api<RecommendationResult>('/api/recommendations')); }
+    catch (failure) { setRecommendationError(errorText(failure)); }
+    finally { setLoadingRecommendations(false); }
+  }
+
+  function toggleLow(id: number) {
+    const next = lowTitles.includes(id) ? lowTitles.filter(title => title !== id) : [...lowTitles, id];
+    setLowTitles(next);
+    try { localStorage.setItem('watchlist-low-fanservice', JSON.stringify(next)); } catch {}
+  }
+
   useEffect(() => {
+    try {
+      const saved: unknown = JSON.parse(localStorage.getItem('watchlist-low-fanservice') ?? '[]');
+      if (Array.isArray(saved)) setLowTitles(saved.filter(Number.isInteger));
+    } catch {}
     const params = new URLSearchParams(window.location.search);
     const auth = params.get('auth');
     setEmailConfirmation(params.get('email') === 'confirm');
@@ -202,6 +320,10 @@ export default function Watchlist() {
   const selectedLimit = selected ? progressLimit(selected) : null;
   const selectedProgress = selected?.mediaListEntry?.progress ?? 0;
   const selectedMaximum = Math.max(selectedProgress, selectedLimit ?? 0);
+  const tracked = new Set(entries.map(entry => entry.media.id));
+  const visibleRecommendations = recommendations?.items.filter(({ media, fanservice }) =>
+    !tracked.has(media.id) && (airingFilter === 'all' || media.status === airingFilter) &&
+    (!lowOnly || fanservice !== 'flagged' && lowTitles.includes(media.id))) ?? [];
 
   return <>
     <header className={styles.header}><div className={styles.wrap}>
@@ -230,16 +352,27 @@ export default function Watchlist() {
           {searchOpen ? 'Close search' : '+ Add anime'}
         </button>}
       </div>
+      {session?.name && <nav className={styles.views} aria-label="Anime Tracker views">
+        <button className={styles.secondary} title="Watchlist" aria-pressed={view === 'watchlist'}
+          onClick={() => setView('watchlist')}><ControlLabel icon="all">Watchlist</ControlLabel></button>
+        <button className={styles.secondary} title="For You" aria-pressed={view === 'recommendations'} onClick={() => {
+          setView('recommendations');
+          if (!recommendations && !loadingRecommendations) void loadRecommendations();
+        }}><ControlLabel icon="sparkle">For You</ControlLabel></button>
+      </nav>}
       {searchOpen && <section className={styles.search} aria-label="Add anime">
         <form onSubmit={search}><label htmlFor="title">Anime title</label><div className={styles.row}>
           <input id="title" name="title" type="search" minLength={2} maxLength={120} required placeholder="Search AniList" />
           <button className={styles.primary} disabled={searching}>{searching ? 'Searching…' : 'Search'}</button>
         </div></form>
         {matches?.length === 0 && <p className={styles.muted}>No matching titles found.</p>}
-        {matches?.map(media => <button key={media.id} className={styles.result} onClick={() => void openEntry(media)} disabled={editing}>
-          <Cover media={media} /><span><strong>{displayName(media)}</strong>
-            <small>{[media.seasonYear, media.format, media.episodes && media.episodes + ' episodes'].filter(Boolean).join(' · ')}</small>
-          </span></button>)}
+        {matches?.map(media => <div key={media.id} className={styles.result}>
+          <PosterButton media={media} onPreview={setPreview} />
+          <button type="button" className={styles.resultTitle} onClick={() => void openEntry(media)} disabled={editing}>
+            <strong>{displayName(media)}</strong>
+            <small>{[media.seasonYear, media.format, episodeCount(media)].filter(Boolean).join(' · ')}</small>
+          </button>
+        </div>)}
       </section>}
       <p className={styles.notice} role="status">{notice}</p>
       {loading ? <p className={styles.muted} role="status">Loading your watchlist…</p> : error
@@ -265,6 +398,47 @@ export default function Watchlist() {
         </div>
         : !session?.name ? <div className={styles.empty}><h2>Connect your AniList account</h2>
           <p>{session?.configured ? 'Sign in to see your saved titles and episode progress.' : 'Set your AniList client credentials to enable sign-in.'}</p></div>
+        : view === 'recommendations' ? <section className={styles.section} aria-labelledby="for-you-title">
+          <h2 id="for-you-title">For You</h2>
+          <div className={styles.recommendationFilters}>
+            <div className={styles.airingFilters} role="group" aria-label="Airing status">
+              {airingFilters.map(({ value, label, icon }) => <button key={value} type="button" className={styles.filterChip}
+                title={label} aria-pressed={airingFilter === value} onClick={() => setAiringFilter(value)}>
+                <ControlLabel icon={icon}>{label}</ControlLabel>
+              </button>)}
+            </div>
+            <button type="button" className={styles.filterChip} title="Low fanservice" aria-pressed={lowOnly}
+              onClick={() => setLowOnly(value => !value)}><ControlLabel icon="shield">Low fanservice</ControlLabel></button>
+            <button className={styles.secondary} title="Refresh picks" disabled={loadingRecommendations}
+              onClick={() => void loadRecommendations()}><ControlLabel icon="refresh">Refresh picks</ControlLabel></button>
+          </div>
+          {loadingRecommendations ? <p role="status">Finding recommendations…</p>
+            : recommendationError ? <p role="alert">{recommendationError}</p>
+            : !recommendations?.hasSeeds ? <p>Log an episode or finish a show you enjoyed to get your first picks.</p>
+            : !visibleRecommendations.length ? <p>{airingFilter !== 'all' || lowOnly
+              ? 'No picks match these filters.' : 'No new picks yet. Try again after updating your watchlist.'}</p>
+            : <ul className={styles.cards}>{visibleRecommendations.map(({ media, because, fanservice }) => {
+              const markedLow = lowTitles.includes(media.id);
+              return <li className={`${styles.card} ${styles.recommendationCard}`} key={media.id}>
+                <PosterButton media={media} onPreview={setPreview} />
+                <div className={styles.cardInfo}>
+                  <h3>{displayName(media)}</h3>
+                  <p>{episodeCount(media)} · {media.status === 'RELEASING' ? 'Airing now' : 'Finished airing'}</p>
+                  <p>Recommended for fans of <strong className={styles.sourceTitle}>{titleName(because)}</strong>.</p>
+                  <div className={styles.fanserviceRow}>
+                    <p>{fanserviceLabels[markedLow && fanservice !== 'flagged' ? 'low' : fanservice]}</p>
+                    {fanservice !== 'flagged' && <button className={styles.markLow} aria-pressed={markedLow}
+                      title="Mark as low fanservice" onClick={() => toggleLow(media.id)}>
+                      <ControlLabel icon="shield">Mark as low fanservice</ControlLabel>
+                    </button>}
+                  </div>
+                </div>
+                <div className={styles.actions}><button className={styles.secondary} title="Add to list"
+                  aria-label={'Add ' + displayName(media)} disabled={editing || saving !== null}
+                  onClick={() => void openEntry(media)}><ControlLabel icon="add">Add to list</ControlLabel></button></div>
+              </li>;
+            })}</ul>}
+        </section>
         : <div className={styles.layout}>
           <nav aria-label="Watchlist status" className={styles.filters}>
             <button aria-pressed={filter === 'All'} onClick={() => setFilter('All')}>
@@ -295,7 +469,7 @@ export default function Watchlist() {
                 const next = media.nextAiringEpisode;
                 const counts = [progress + ' watched', limit !== null && limit + ' aired', media.episodes && media.episodes + ' total'];
                 return <li key={media.id} className={styles.card}>
-                  <Cover media={media} />
+                  <PosterButton media={media} onPreview={setPreview} />
                   <div className={styles.cardInfo}><h3>{displayName(media)}</h3>
                     <p>{media.format === 'MOVIE' && media.episodes === 1 ? (progress ? 'Watched' : 'Ready to watch')
                       : media.status === 'RELEASING' ? counts.filter(Boolean).join(' · ')
@@ -326,6 +500,7 @@ export default function Watchlist() {
           </div>
         </div>}
     </main>
+    {preview && <PosterPreview key={preview.id} media={preview} onClose={() => setPreview(null)} />}
     <dialog ref={dialog} className={styles.dialog} aria-labelledby="entry-title" onClose={() => setSelected(null)}
       onCancel={event => { if (saving !== null) event.preventDefault(); }}>
       {selected && <><div className={styles.dialogHeading}><h2 id="entry-title">{displayName(selected)}</h2>
