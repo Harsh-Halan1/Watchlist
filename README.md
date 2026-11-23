@@ -54,3 +54,11 @@ node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 
 Open the canonical production URL, request a link, open it, and select **Continue**. Then connect AniList. Each browser needs its own sign-in and AniList connection. Sessions last seven days and survive server restarts while the same session secret is configured. Progress is shared through AniList. The existing local setup continues to use AniList directly when the owner sign-in variables are unset.
 
+## Set an owner password
+
+Use the existing Firebase user whose verified address matches `OWNER_EMAIL`. If the account has never signed in, choose **Use an email link instead** in the tracker and complete sign-in once.
+
+In Firebase Console, open **Authentication → Users** and send a password reset email for that existing account. Set a unique password using the link, then use **Sign in** in the tracker. If the Firebase project uses a custom email action handler that only handles sign-in links, an administrator can instead [set the password on the existing Firebase user by UID](https://firebase.google.com/docs/auth/admin/manage-users#update_a_user).
+
+Use the same Firebase project and Vercel environment variables. The email link remains available as a fallback.
+

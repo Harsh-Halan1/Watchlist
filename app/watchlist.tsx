@@ -15,11 +15,29 @@ type Progress = { progress: number; status: Status; updatedAt: number };
 type Entry = Progress & { media: Media };
 type Details = Media & { mediaListEntry?: Progress | null };
 type Session = { demo: boolean; configured: boolean; signedIn: boolean; privateMode: boolean; name?: string };
-const groups: { label: string; values: Status[] }[] = [
-  { label: 'Watching', values: ['CURRENT', 'REPEATING'] }, { label: 'Plan to Watch', values: ['PLANNING'] },
-  { label: 'Completed', values: ['COMPLETED'] }, { label: 'On Hold', values: ['PAUSED'] },
-  { label: 'Dropped', values: ['DROPPED'] },
+const filterIcons = {
+  all: 'M4 6h16M4 12h16M4 18h16',
+  watching: 'm8 5 12 7-12 7V5Z',
+  planning: 'M6 4h12v17l-6-4-6 4V4Z',
+  completed: 'm5 12 4 4L19 6',
+  paused: 'M9 5v14M15 5v14',
+  dropped: 'm6 6 12 12M18 6 6 18',
+  refresh: 'M20 4v6h-6M20 10a8 8 0 1 0-.4 5',
+};
+const groups: { label: string; values: Status[]; icon: keyof typeof filterIcons }[] = [
+  { label: 'Watching', values: ['CURRENT', 'REPEATING'], icon: 'watching' },
+  { label: 'Plan to Watch', values: ['PLANNING'], icon: 'planning' },
+  { label: 'Completed', values: ['COMPLETED'], icon: 'completed' },
+  { label: 'On Hold', values: ['PAUSED'], icon: 'paused' },
+  { label: 'Dropped', values: ['DROPPED'], icon: 'dropped' },
 ];
+
+function FilterIcon({ name }: { name: keyof typeof filterIcons }) {
+  return <svg className={styles.filterIcon} viewBox="0 0 24 24" aria-hidden="true" focusable="false"
+    fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <path d={filterIcons[name]} />
+  </svg>;
+}
 
 function displayStatus(entry: Entry): Status {
   return isFullyWatched(entry.media, entry.progress) ? 'COMPLETED' : entry.status;
@@ -65,7 +83,8 @@ function ThemeToggle() {
 export default function Watchlist() {
   const [session, setSession] = useState<Session | null>(null);
   const [emailConfirmation, setEmailConfirmation] = useState(false);
-  const [sendingEmail, setSendingEmail] = useState(false);
+  const [useEmailLink, setUseEmailLink] = useState(false);
+  const [signingIn, setSigningIn] = useState(false);
   const [entries, setEntries] = useState<Entry[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('All');
@@ -110,16 +129,22 @@ export default function Watchlist() {
     if (!selected && dialog.current?.open) dialog.current.close();
   }, [selected]);
 
-  async function requestEmail(event: FormEvent<HTMLFormElement>) {
+  async function signIn(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const email = new FormData(event.currentTarget).get('email');
-    setSendingEmail(true);
+    const fields = new FormData(event.currentTarget);
+    const email = fields.get('email');
+    setSigningIn(true);
     setNotice('');
     try {
-      await api('/oauth/email/start', { email });
-      setNotice('If this email can access the tracker, a sign-in link will arrive shortly.');
+      if (useEmailLink) {
+        await api('/oauth/email/start', { email });
+        setNotice('If this email can access the tracker, a sign-in link will arrive shortly.');
+      } else {
+        await api('/oauth/password', { email, password: fields.get('password') });
+        window.location.assign('/');
+      }
     } catch (failure) { setNotice(errorText(failure)); }
-    finally { setSendingEmail(false); }
+    finally { setSigningIn(false); }
   }
 
   async function search(event: FormEvent<HTMLFormElement>) {
@@ -215,9 +240,17 @@ export default function Watchlist() {
         </div>
         : session?.privateMode && !session.signedIn ? <div className={styles.empty}>
           <h2>Sign in to Anime Tracker</h2>
-          <form onSubmit={requestEmail} className={styles.edit}>
-            <label>Email address<input name="email" type="email" autoComplete="email" required maxLength={254} /></label>
-            <button className={styles.primary} disabled={sendingEmail}>{sendingEmail ? 'Sending…' : 'Send sign-in link'}</button>
+          <form method="post" onSubmit={signIn} className={styles.edit}>
+            <label>Email address<input name="email" type="email" autoComplete="username" required maxLength={254} /></label>
+            {!useEmailLink && <label>Password<input name="password" type="password"
+              autoComplete="current-password" required maxLength={4096} /></label>}
+            <button className={styles.primary} disabled={signingIn}>
+              {useEmailLink ? (signingIn ? 'Sending…' : 'Send sign-in link') : (signingIn ? 'Signing in…' : 'Sign in')}
+            </button>
+            <button type="button" className={styles.secondary} disabled={signingIn}
+              onClick={() => { setUseEmailLink(value => !value); setNotice(''); }}>
+              {useEmailLink ? 'Use password instead' : 'Use an email link instead'}
+            </button>
           </form>
         </div>
         : !session?.name ? <div className={styles.empty}><h2>Connect your AniList account</h2>
@@ -225,13 +258,17 @@ export default function Watchlist() {
         : <div className={styles.layout}>
           <nav aria-label="Watchlist status" className={styles.filters}>
             <button aria-pressed={filter === 'All'} onClick={() => setFilter('All')}>
-              All titles <span className={styles.count}>{entries.length}</span>
+              <FilterIcon name="all" /><span className={styles.filterLabel}>All titles</span>
+              <span className={styles.count}>{entries.length}</span>
             </button>
             {groups.map(group => <button key={group.label} aria-pressed={filter === group.label}
-              onClick={() => setFilter(group.label)}>{group.label}
+              onClick={() => setFilter(group.label)}>
+              <FilterIcon name={group.icon} /><span className={styles.filterLabel}>{group.label}</span>
               <span className={styles.count}>{entries.filter(entry => group.values.includes(displayStatus(entry))).length}</span>
             </button>)}
-            <button className={styles.refresh} onClick={() => void loadList()} disabled={saving !== null}>Refresh</button>
+            <button className={styles.refresh} onClick={() => void loadList()} disabled={saving !== null}>
+              <FilterIcon name="refresh" /><span className={styles.filterLabel}>Refresh</span>
+            </button>
           </nav>
           <div key={filter} className={styles.list}>
           {groups.filter(group => filter === 'All' || filter === group.label).map(group => {
