@@ -15,7 +15,7 @@ type Progress = { progress: number; status: Status; updatedAt: number };
 type Entry = Progress & { media: Media };
 type Details = Media & { mediaListEntry?: Progress | null };
 type Session = { demo: boolean; configured: boolean; signedIn: boolean; privateMode: boolean; name?: string };
-const filterIcons = {
+const icons = {
   all: 'M4 6h16M4 12h16M4 18h16',
   watching: 'm8 5 12 7-12 7V5Z',
   planning: 'M6 4h12v17l-6-4-6 4V4Z',
@@ -23,8 +23,10 @@ const filterIcons = {
   paused: 'M9 5v14M15 5v14',
   dropped: 'm6 6 12 12M18 6 6 18',
   refresh: 'M20 4v6h-6M20 10a8 8 0 1 0-.4 5',
+  signOut: 'M10 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h5M10 12h10m-4-4 4 4-4 4',
+  disconnect: 'm15 10 3-3a2.8 2.8 0 0 0-4-4l-3 3m-2 8-3 3a2.8 2.8 0 0 0 4 4l3-3M3 3l18 18',
 };
-const groups: { label: string; values: Status[]; icon: keyof typeof filterIcons }[] = [
+const groups: { label: string; values: Status[]; icon: keyof typeof icons }[] = [
   { label: 'Watching', values: ['CURRENT', 'REPEATING'], icon: 'watching' },
   { label: 'Plan to Watch', values: ['PLANNING'], icon: 'planning' },
   { label: 'Completed', values: ['COMPLETED'], icon: 'completed' },
@@ -32,10 +34,10 @@ const groups: { label: string; values: Status[]; icon: keyof typeof filterIcons 
   { label: 'Dropped', values: ['DROPPED'], icon: 'dropped' },
 ];
 
-function FilterIcon({ name }: { name: keyof typeof filterIcons }) {
-  return <svg className={styles.filterIcon} viewBox="0 0 24 24" aria-hidden="true" focusable="false"
+function Icon({ name }: { name: keyof typeof icons }) {
+  return <svg className={styles.icon} viewBox="0 0 24 24" aria-hidden="true" focusable="false"
     fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-    <path d={filterIcons[name]} />
+    <path d={icons[name]} />
   </svg>;
 }
 
@@ -206,10 +208,18 @@ export default function Watchlist() {
       <a href="/" className={styles.brand}><span className={styles.brandMark} aria-hidden="true" /> Anime Tracker</a>
       <div className={styles.account}>
         <ThemeToggle />
-        {session?.name && <span>{session.name}</span>}
-        {session?.privateMode && session.signedIn && <form method="post" action="/oauth/sign-out"><button className={styles.secondary}>Sign out</button></form>}
+        {session?.name && <span className={styles.accountName}>{session.name}</span>}
+        {session?.privateMode && session.signedIn && <form method="post" action="/oauth/sign-out">
+          <button className={`${styles.secondary} ${styles.accountAction}`} title="Sign out of Anime Tracker" aria-label="Sign out of Anime Tracker">
+            <Icon name="signOut" /><span className={styles.compactLabel}>Sign out</span>
+          </button>
+        </form>}
         {session?.signedIn && !session.demo && (session.name
-          ? <form method="post" action="/oauth/disconnect"><button className={styles.secondary}>Disconnect</button></form>
+          ? <form method="post" action="/oauth/disconnect">
+            <button className={`${styles.secondary} ${styles.accountAction}`} title="Disconnect AniList" aria-label="Disconnect AniList">
+              <Icon name="disconnect" /><span className={styles.compactLabel}>Disconnect</span>
+            </button>
+          </form>
           : session.configured && <form method="post" action="/oauth/start"><button className={styles.primary}>Connect AniList</button></form>)}
       </div>
     </div></header>
@@ -258,16 +268,16 @@ export default function Watchlist() {
         : <div className={styles.layout}>
           <nav aria-label="Watchlist status" className={styles.filters}>
             <button aria-pressed={filter === 'All'} onClick={() => setFilter('All')}>
-              <FilterIcon name="all" /><span className={styles.filterLabel}>All titles</span>
+              <Icon name="all" /><span className={styles.compactLabel}>All titles</span>
               <span className={styles.count}>{entries.length}</span>
             </button>
             {groups.map(group => <button key={group.label} aria-pressed={filter === group.label}
               onClick={() => setFilter(group.label)}>
-              <FilterIcon name={group.icon} /><span className={styles.filterLabel}>{group.label}</span>
+              <Icon name={group.icon} /><span className={styles.compactLabel}>{group.label}</span>
               <span className={styles.count}>{entries.filter(entry => group.values.includes(displayStatus(entry))).length}</span>
             </button>)}
             <button className={styles.refresh} onClick={() => void loadList()} disabled={saving !== null}>
-              <FilterIcon name="refresh" /><span className={styles.filterLabel}>Refresh</span>
+              <Icon name="refresh" /><span className={styles.compactLabel}>Refresh</span>
             </button>
           </nav>
           <div key={filter} className={styles.list}>
