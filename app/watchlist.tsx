@@ -11,8 +11,9 @@ type Media = {
   episodes: number | null; status: string; format?: string; seasonYear?: number;
   coverImage?: { large?: string }; nextAiringEpisode?: { episode: number; airingAt: number } | null;
 };
-type Progress = { progress: number; status: Status; updatedAt: number };
+type Progress = { progress: number; status: Status; updatedAt: number; score?: number };
 type Entry = Progress & { media: Media };
+type ScheduledEpisode = { id: number; media: Media; airingAt: number; episode: number };
 type Details = Media & { mediaListEntry?: Progress | null };
 type MediaPreview = {
   coverImage?: { extraLarge?: string | null } | null;
@@ -32,13 +33,15 @@ type RecommendationResult = { hasSeeds: boolean; items: Recommendation[] };
 const fanserviceLabels: Record<Fanservice, string> = {
   unknown: 'Fanservice unknown', flagged: 'AniList flags sexual content', low: 'Low fanservice',
 };
-type Session = { demo: boolean; configured: boolean; signedIn: boolean; privateMode: boolean; name?: string };
+type Session = { demo: boolean; configured: boolean; signedIn: boolean; privateMode: boolean; name?: string; viewerId?: number };
 const icons = {
   all: 'M4 6h16M4 12h16M4 18h16',
   status: 'M4 7h16M7 12h10m-7 5h4',
   sparkle: 'M12 3l2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5L12 3Z',
   shield: 'M12 3l7 3v5c0 4-3 7-7 10-4-3-7-6-7-10V6l7-3Zm-3 9 2 2 4-4',
   add: 'M12 5v14M5 12h14',
+  calendar: 'M7 3v4m10-4v4M4 10h16M5 5h14a1 1 0 0 1 1 1v14H4V6a1 1 0 0 1 1-1Z',
+  restore: 'M5 4v6h6M5 10a8 8 0 1 1 0 6',
   watching: 'm8 5 12 7-12 7V5Z',
   planning: 'M6 4h12v17l-6-4-6 4V4Z',
   completed: 'm5 12 4 4L19 6',
@@ -179,13 +182,19 @@ export default function Watchlist() {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('All');
-  const [view, setView] = useState<'watchlist' | 'recommendations'>('watchlist');
+  const [view, setView] = useState<'watchlist' | 'recommendations' | 'schedule'>('watchlist');
+  const [scheduled, setScheduled] = useState<ScheduledEpisode[] | null>(null);
+  const [scheduleError, setScheduleError] = useState('');
+  const [loadingSchedule, setLoadingSchedule] = useState(false);
+  const [trackedOnly, setTrackedOnly] = useState(false);
   const [recommendations, setRecommendations] = useState<RecommendationResult | null>(null);
   const [recommendationError, setRecommendationError] = useState('');
   const [loadingRecommendations, setLoadingRecommendations] = useState(false);
   const [airingFilter, setAiringFilter] = useState<AiringFilter>('all');
   const [lowOnly, setLowOnly] = useState(false);
   const [lowTitles, setLowTitles] = useState<number[]>([]);
+  const [skippedTitles, setSkippedTitles] = useState<number[]>([]);
+  const [showSkipped, setShowSkipped] = useState(false);
   const [notice, setNotice] = useState('');
   const [editError, setEditError] = useState('');
   const [error, setError] = useState('');
@@ -197,6 +206,7 @@ export default function Watchlist() {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState<number | null>(null);
   const [draft, setDraft] = useState('0');
+  const [rating, setRating] = useState('');
   const [status, setStatus] = useState<Status | ''>('');
   const dialog = useRef<HTMLDialogElement>(null);
 
@@ -217,6 +227,25 @@ export default function Watchlist() {
     try { setRecommendations(await api<RecommendationResult>('/api/recommendations')); }
     catch (failure) { setRecommendationError(errorText(failure)); }
     finally { setLoadingRecommendations(false); }
+  }
+
+  async function loadSchedule() {
+    setLoadingSchedule(true);
+    setScheduleError('');
+    try { setScheduled(await api<ScheduledEpisode[]>('/api/schedule')); }
+    catch (failure) { setScheduleError(errorText(failure)); }
+    finally { setLoadingSchedule(false); }
+  }
+
+  function saveSkipped(next: number[]) {
+    setSkippedTitles(next);
+    try { localStorage.setItem('watchlist-skipped-' + session?.viewerId, JSON.stringify(next)); } catch {}
+  }
+
+  function toggleSkip(media: Media) {
+    const skipped = skippedTitles.includes(media.id);
+    saveSkipped(skipped ? skippedTitles.filter(id => id !== media.id) : [...skippedTitles, media.id]);
+    setNotice((skipped ? 'Restored ' : 'Skipped ') + displayName(media) + '.');
   }
 
   function toggleLow(id: number) {
@@ -240,6 +269,12 @@ export default function Watchlist() {
     if (auth || params.get('email') === 'failed') window.history.replaceState(null, '', '/');
     api<Session>('/api/session').then(account => {
       setSession(account);
+      if (account.viewerId != null) {
+        try {
+          const saved: unknown = JSON.parse(localStorage.getItem('watchlist-skipped-' + account.viewerId) ?? '[]');
+          if (Array.isArray(saved)) setSkippedTitles(saved.filter(Number.isInteger));
+        } catch {}
+      }
       if (account.name) void loadList(); else setLoading(false);
     }).catch(failure => { setError(errorText(failure)); setLoading(false); });
   }, []);
@@ -284,7 +319,10 @@ export default function Watchlist() {
     setNotice('');
     try {
       const item: Details = session?.name ? await api<Details>('/api/entry?id=' + media.id) : media;
-      setDraft(String(item.mediaListEntry?.progress ?? 0));
+      const aired = item.status === 'FINISHED' ? item.episodes : progressLimit(item);
+      const defaultProgress = aired != null && Number.isFinite(aired) ? aired : 0;
+      setDraft(String(item.mediaListEntry?.progress ?? defaultProgress));
+      setRating(item.mediaListEntry?.score ? String(item.mediaListEntry.score) : '');
       setStatus(item.mediaListEntry?.status ?? '');
       setSelected(item);
     } catch (failure) { setNotice(errorText(failure)); }
@@ -298,6 +336,10 @@ export default function Watchlist() {
     try {
       const entry = await api<Entry>('/api/entry', { id, ...input });
       setEntries(previous => [entry, ...previous.filter(item => item.media.id !== entry.media.id)]);
+      if (input.score !== undefined) {
+        setRecommendations(null);
+        if (view === 'recommendations') void loadRecommendations();
+      }
       setSelected(null);
       setNotice(entry.status === 'COMPLETED' && isFullyWatched(entry.media, entry.progress)
         ? displayName(entry.media) + ' is in Completed.'
@@ -312,8 +354,11 @@ export default function Watchlist() {
     event.preventDefault();
     if (!selected) return;
     const entry = selected.mediaListEntry;
+    const score = Number(rating);
+    const previousScore = entry?.score ?? 0;
     void save(selected.id, { action: 'save', progress: Number(draft),
       expectedProgress: entry?.progress ?? null, expectedStatus: entry?.status ?? null,
+      ...(score !== previousScore ? { score, expectedScore: previousScore } : {}),
       ...(status && status !== entry?.status ? { status } : {}) });
   }
 
@@ -321,9 +366,19 @@ export default function Watchlist() {
   const selectedProgress = selected?.mediaListEntry?.progress ?? 0;
   const selectedMaximum = Math.max(selectedProgress, selectedLimit ?? 0);
   const tracked = new Set(entries.map(entry => entry.media.id));
+  const skipped = new Set(skippedTitles);
   const visibleRecommendations = recommendations?.items.filter(({ media, fanservice }) =>
-    !tracked.has(media.id) && (airingFilter === 'all' || media.status === airingFilter) &&
-    (!lowOnly || fanservice !== 'flagged' && lowTitles.includes(media.id))) ?? [];
+    !tracked.has(media.id) && (showSkipped ? skipped.has(media.id) :
+      !skipped.has(media.id) && (airingFilter === 'all' || media.status === airingFilter) &&
+      (!lowOnly || fanservice !== 'flagged' && lowTitles.includes(media.id)))) ?? [];
+  const scheduleDays = new Map<string, ScheduledEpisode[]>();
+  for (const item of scheduled ?? []) {
+    if (item.airingAt * 1000 <= Date.now() || (trackedOnly && !tracked.has(item.media.id))) continue;
+    const day = new Date(item.airingAt * 1000).toLocaleDateString(undefined, { dateStyle: 'full' });
+    const episodes = scheduleDays.get(day) ?? [];
+    episodes.push(item);
+    scheduleDays.set(day, episodes);
+  }
 
   return <>
     <header className={styles.header}><div className={styles.wrap}>
@@ -359,6 +414,10 @@ export default function Watchlist() {
           setView('recommendations');
           if (!recommendations && !loadingRecommendations) void loadRecommendations();
         }}><ControlLabel icon="sparkle">For You</ControlLabel></button>
+        <button className={styles.secondary} title="Schedule" aria-pressed={view === 'schedule'} onClick={() => {
+          setView('schedule');
+          if (!scheduled && !loadingSchedule) void loadSchedule();
+        }}><ControlLabel icon="calendar">Schedule</ControlLabel></button>
       </nav>}
       {searchOpen && <section className={styles.search} aria-label="Add anime">
         <form onSubmit={search}><label htmlFor="title">Anime title</label><div className={styles.row}>
@@ -398,24 +457,69 @@ export default function Watchlist() {
         </div>
         : !session?.name ? <div className={styles.empty}><h2>Connect your AniList account</h2>
           <p>{session?.configured ? 'Sign in to see your saved titles and episode progress.' : 'Set your AniList client credentials to enable sign-in.'}</p></div>
+        : view === 'schedule' ? <section className={styles.section} aria-labelledby="schedule-title">
+          <h2 id="schedule-title">Airing schedule</h2>
+          <p className={styles.muted}>Next 7 days · Your local time</p>
+          <div className={styles.scheduleControls}>
+            <button type="button" className={styles.filterChip} aria-pressed={trackedOnly}
+              onClick={() => setTrackedOnly(value => !value)}>
+              <Icon name="all" /> My watchlist only
+            </button>
+            <button type="button" className={styles.filterChip} disabled={loadingSchedule}
+              onClick={() => void loadSchedule()}><Icon name="refresh" /> Refresh</button>
+          </div>
+          {loadingSchedule ? <p role="status">Loading the airing schedule.</p>
+            : scheduleError ? <p role="alert">{scheduleError}</p>
+            : !scheduleDays.size ? <p>{trackedOnly
+              ? 'No episodes from your watchlist are scheduled in the next 7 days.'
+              : 'No upcoming episodes listed for the next 7 days.'}</p>
+            : [...scheduleDays].map(([day, episodes]) => <details key={day} className={styles.scheduleDay}>
+              <summary className={styles.scheduleDayHeading}>
+                <span>{day}</span>
+                <span className={styles.count}>{episodes.length} {episodes.length === 1 ? 'episode' : 'episodes'}</span>
+              </summary>
+              <ul className={styles.cards}>{episodes.map(({ id, media, episode, airingAt }) => <li key={id} className={styles.card}>
+                <PosterButton media={media} onPreview={setPreview} />
+                <div className={styles.cardInfo}>
+                  <h4>{displayName(media)}</h4>
+                  <p>Episode {episode} · <time dateTime={new Date(airingAt * 1000).toISOString()}>
+                    {new Date(airingAt * 1000).toLocaleTimeString(undefined, { timeStyle: 'short' })}
+                  </time>{tracked.has(media.id) && ' · On your watchlist'}</p>
+                </div>
+                {!tracked.has(media.id) && <div className={styles.actions}>
+                  <button type="button" className={styles.secondary} title="Add to list"
+                    aria-label={'Add ' + displayName(media)} disabled={editing || saving !== null}
+                    onClick={() => void openEntry(media)}><ControlLabel icon="add">Add to list</ControlLabel></button>
+                </div>}
+              </li>)}</ul>
+            </details>)}
+        </section>
         : view === 'recommendations' ? <section className={styles.section} aria-labelledby="for-you-title">
           <h2 id="for-you-title">For You</h2>
           <div className={styles.recommendationFilters}>
-            <div className={styles.airingFilters} role="group" aria-label="Airing status">
+            {!showSkipped && <div className={styles.airingFilters} role="group" aria-label="Airing status">
               {airingFilters.map(({ value, label, icon }) => <button key={value} type="button" className={styles.filterChip}
                 title={label} aria-pressed={airingFilter === value} onClick={() => setAiringFilter(value)}>
                 <ControlLabel icon={icon}>{label}</ControlLabel>
               </button>)}
-            </div>
-            <button type="button" className={styles.filterChip} title="Low fanservice" aria-pressed={lowOnly}
-              onClick={() => setLowOnly(value => !value)}><ControlLabel icon="shield">Low fanservice</ControlLabel></button>
+            </div>}
+            {!showSkipped && <button type="button" className={styles.filterChip} title="Low fanservice" aria-pressed={lowOnly}
+              onClick={() => setLowOnly(value => !value)}><ControlLabel icon="shield">Low fanservice</ControlLabel></button>}
+            {(skippedTitles.length > 0 || showSkipped) && <button type="button" className={styles.filterChip}
+              title="Skipped picks" aria-pressed={showSkipped} onClick={() => setShowSkipped(value => !value)}>
+              <ControlLabel icon="restore">Skipped picks</ControlLabel>
+            </button>}
+            {showSkipped && skippedTitles.length > 0 && <button type="button" className={styles.filterChip}
+              onClick={() => { saveSkipped([]); setShowSkipped(false); setNotice('Restored all skipped picks.'); }}>
+              Restore all
+            </button>}
             <button className={styles.secondary} title="Refresh picks" disabled={loadingRecommendations}
               onClick={() => void loadRecommendations()}><ControlLabel icon="refresh">Refresh picks</ControlLabel></button>
           </div>
           {loadingRecommendations ? <p role="status">Finding recommendations…</p>
             : recommendationError ? <p role="alert">{recommendationError}</p>
             : !recommendations?.hasSeeds ? <p>Log an episode or finish a show you enjoyed to get your first picks.</p>
-            : !visibleRecommendations.length ? <p>{airingFilter !== 'all' || lowOnly
+            : !visibleRecommendations.length ? <p>{showSkipped ? 'No skipped picks in these recommendations.' : airingFilter !== 'all' || lowOnly
               ? 'No picks match these filters.' : 'No new picks yet. Try again after updating your watchlist.'}</p>
             : <ul className={styles.cards}>{visibleRecommendations.map(({ media, because, fanservice }) => {
               const markedLow = lowTitles.includes(media.id);
@@ -433,9 +537,15 @@ export default function Watchlist() {
                     </button>}
                   </div>
                 </div>
-                <div className={styles.actions}><button className={styles.secondary} title="Add to list"
-                  aria-label={'Add ' + displayName(media)} disabled={editing || saving !== null}
-                  onClick={() => void openEntry(media)}><ControlLabel icon="add">Add to list</ControlLabel></button></div>
+                <div className={styles.actions}>
+                  {!showSkipped && <button className={styles.secondary} title="Add to list"
+                    aria-label={'Add ' + displayName(media)} disabled={editing || saving !== null}
+                    onClick={() => void openEntry(media)}><ControlLabel icon="add">Add to list</ControlLabel></button>}
+                  <button className={styles.secondary} title={showSkipped ? 'Restore recommendation' : 'Skip recommendation'}
+                    aria-label={(showSkipped ? 'Restore ' : 'Skip ') + displayName(media)} onClick={() => toggleSkip(media)}>
+                    <ControlLabel icon={showSkipped ? 'restore' : 'dropped'}>{showSkipped ? 'Restore' : 'Skip'}</ControlLabel>
+                  </button>
+                </div>
               </li>;
             })}</ul>}
         </section>
@@ -466,6 +576,8 @@ export default function Watchlist() {
                 const now = Date.now();
                 const release = airing(media, progress, now);
                 const limit = progressLimit(media, now);
+                const unwatched = group.label === 'Watching' && media.status === 'RELEASING' && limit !== null
+                  ? Math.max(0, limit - progress) : 0;
                 const next = media.nextAiringEpisode;
                 const counts = [progress + ' watched', limit !== null && limit + ' aired', media.episodes && media.episodes + ' total'];
                 return <li key={media.id} className={styles.card}>
@@ -477,7 +589,10 @@ export default function Watchlist() {
                     {media.episodes !== null && media.episodes > 1 && group.label === 'Watching' &&
                       <progress className={styles.progress} value={progress} max={media.episodes}
                         aria-label={'Series progress for ' + displayName(media)} />}
-                    {release && !(media.format === 'MOVIE' && release === 'All episodes watched') &&
+                    {!!entry.score && <p>Your rating {entry.score}/100</p>}
+                    {unwatched > 0 ? <span className={styles.episodeBadge}>
+                      {unwatched === 1 ? 'New episode' : unwatched + ' unwatched episodes'}
+                    </span> : release && !(media.format === 'MOVIE' && release === 'All episodes watched') &&
                       <p className={styles.release}>{release}</p>}
                     {media.status === 'RELEASING' && next && next.airingAt * 1000 > now &&
                       <p className={styles.schedule}>Episode {next.episode} airs <time dateTime={new Date(next.airingAt * 1000).toISOString()}>
@@ -520,6 +635,8 @@ export default function Watchlist() {
             {groups.map(group => <option key={group.label} value={group.values[0]}>{group.label}</option>)}
             {selected.mediaListEntry?.status === 'REPEATING' && <option value="REPEATING">Rewatching</option>}
           </select></label>
+          <label>Your rating (out of 100)<input type="number" min={1} max={100} step={1}
+            placeholder="Unrated" value={rating} onChange={event => { setRating(event.target.value); setEditError(''); }} /></label>
           <button className={styles.primary} disabled={saving !== null}>{saving !== null ? 'Saving…' : 'Save to watchlist'}</button>
           {editError && <p role="alert" className={styles.editError}>{editError}</p>}
         </form> : <p className={styles.muted}>Connect AniList to log your progress.</p>}
