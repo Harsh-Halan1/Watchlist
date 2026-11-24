@@ -28,12 +28,19 @@ const airingFilters: { value: AiringFilter; label: string; icon: keyof typeof ic
   { value: 'FINISHED', label: 'Finished airing', icon: 'completed' },
 ];
 type Fanservice = 'unknown' | 'flagged' | 'low';
-type Recommendation = { media: Media; because: Media['title']; fanservice: Fanservice };
+type Recommendation = { media: Media & { genres?: string[] }; because: Media['title']; fanservice: Fanservice };
 type RecommendationResult = { hasSeeds: boolean; items: Recommendation[] };
 const fanserviceLabels: Record<Fanservice, string> = {
   unknown: 'Fanservice unknown', flagged: 'AniList flags sexual content', low: 'Low fanservice',
 };
-type Session = { demo: boolean; configured: boolean; signedIn: boolean; privateMode: boolean; name?: string; viewerId?: number };
+type Session = { demo: boolean; configured: boolean; signedIn: boolean; privateMode: boolean;
+  syncPreferences: boolean; name?: string; viewerId?: number };
+type Preferences = { skipped: number[]; lowFanservice: number[] };
+type PreferenceChange = { action: 'restoreAll' } |
+  { action: 'set'; kind: keyof Preferences; id: number; enabled: boolean };
+const preferencesPath = '/api/recommendation-preferences';
+const lowFanserviceKey = 'watchlist-low-fanservice';
+const skippedKey = (viewerId?: number) => 'watchlist-skipped-' + viewerId;
 const icons = {
   all: 'M4 6h16M4 12h16M4 18h16',
   status: 'M4 7h16M7 12h10m-7 5h4',
@@ -88,6 +95,14 @@ async function api<T>(path: string, input?: object): Promise<T> {
   return data as T;
 }
 const errorText = (error: unknown) => error instanceof Error ? error.message : 'Something went wrong.';
+
+function storedPreferenceIds(key: string): number[] {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(key) ?? '[]');
+    if (Array.isArray(value)) return value.filter(id => Number.isInteger(id) && id > 0 && id <= 2147483647);
+  } catch {}
+  return [];
+}
 
 function Cover({ media }: { media: Media }) {
   const cover = media.coverImage?.large;
@@ -191,9 +206,14 @@ export default function Watchlist() {
   const [recommendationError, setRecommendationError] = useState('');
   const [loadingRecommendations, setLoadingRecommendations] = useState(false);
   const [airingFilter, setAiringFilter] = useState<AiringFilter>('all');
+  const [genreFilter, setGenreFilter] = useState('');
   const [lowOnly, setLowOnly] = useState(false);
   const [lowTitles, setLowTitles] = useState<number[]>([]);
   const [skippedTitles, setSkippedTitles] = useState<number[]>([]);
+  const [preferencesLoaded, setPreferencesLoaded] = useState(false);
+  const [syncingPreferences, setSyncingPreferences] = useState(false);
+  const [preferencesError, setPreferencesError] = useState('');
+  const preferenceRequest = useRef(false);
   const [showSkipped, setShowSkipped] = useState(false);
   const [notice, setNotice] = useState('');
   const [editError, setEditError] = useState('');
@@ -237,28 +257,69 @@ export default function Watchlist() {
     finally { setLoadingSchedule(false); }
   }
 
-  function saveSkipped(next: number[]) {
-    setSkippedTitles(next);
-    try { localStorage.setItem('watchlist-skipped-' + session?.viewerId, JSON.stringify(next)); } catch {}
+  function applyPreferences(prefs: Preferences) {
+    setSkippedTitles(prefs.skipped);
+    setLowTitles(prefs.lowFanservice);
   }
 
-  function toggleSkip(media: Media) {
-    const skipped = skippedTitles.includes(media.id);
-    saveSkipped(skipped ? skippedTitles.filter(id => id !== media.id) : [...skippedTitles, media.id]);
-    setNotice((skipped ? 'Restored ' : 'Skipped ') + displayName(media) + '.');
+  async function syncPreferences(change?: PreferenceChange) {
+    if (!session?.syncPreferences || preferenceRequest.current) return false;
+    preferenceRequest.current = true;
+    setSyncingPreferences(true);
+    setPreferencesError('');
+    try {
+      const migrationKey = 'watchlist-preferences-imported-' + session.viewerId;
+      let imported = false;
+      try { imported = localStorage.getItem(migrationKey) === '1'; } catch {}
+      if (!change && !imported) {
+        const skipped = storedPreferenceIds(skippedKey(session.viewerId));
+        const lowFanservice = storedPreferenceIds(lowFanserviceKey);
+        const legacy = skipped.length || lowFanservice.length
+          ? { action: 'import', skipped, lowFanservice } : undefined;
+        applyPreferences(await api<Preferences>(preferencesPath, legacy));
+        try { localStorage.setItem(migrationKey, '1'); } catch {}
+      } else {
+        applyPreferences(await api<Preferences>(preferencesPath, change));
+      }
+      setPreferencesLoaded(true);
+      return true;
+    } catch (failure) {
+      setPreferencesError(errorText(failure));
+      return false;
+    } finally {
+      preferenceRequest.current = false;
+      setSyncingPreferences(false);
+    }
   }
 
-  function toggleLow(id: number) {
-    const next = lowTitles.includes(id) ? lowTitles.filter(title => title !== id) : [...lowTitles, id];
-    setLowTitles(next);
-    try { localStorage.setItem('watchlist-low-fanservice', JSON.stringify(next)); } catch {}
+  async function changePreferences(change: PreferenceChange) {
+    if (session?.syncPreferences) return syncPreferences(change);
+    const kind = change.action === 'restoreAll' ? 'skipped' : change.kind;
+    const current = kind === 'skipped' ? skippedTitles : lowTitles;
+    const next = change.action === 'restoreAll' ? [] :
+      change.enabled ? [...current, change.id] : current.filter(id => id !== change.id);
+    if (kind === 'skipped') setSkippedTitles(next); else setLowTitles(next);
+    try {
+      localStorage.setItem(kind === 'skipped' ? skippedKey(session?.viewerId) : lowFanserviceKey, JSON.stringify(next));
+    } catch {}
+    return true;
+  }
+
+  async function toggleSkip(media: Media) {
+    const enabled = !skippedTitles.includes(media.id);
+    if (await changePreferences({ action: 'set', kind: 'skipped', id: media.id, enabled })) {
+      setNotice((enabled ? 'Skipped ' : 'Restored ') + displayName(media) + '.');
+    }
+  }
+
+  async function restoreSkipped() {
+    if (await changePreferences({ action: 'restoreAll' })) {
+      setShowSkipped(false);
+      setNotice('Restored all skipped picks.');
+    }
   }
 
   useEffect(() => {
-    try {
-      const saved: unknown = JSON.parse(localStorage.getItem('watchlist-low-fanservice') ?? '[]');
-      if (Array.isArray(saved)) setLowTitles(saved.filter(Number.isInteger));
-    } catch {}
     const params = new URLSearchParams(window.location.search);
     const auth = params.get('auth');
     setEmailConfirmation(params.get('email') === 'confirm');
@@ -269,11 +330,12 @@ export default function Watchlist() {
     if (auth || params.get('email') === 'failed') window.history.replaceState(null, '', '/');
     api<Session>('/api/session').then(account => {
       setSession(account);
-      if (account.viewerId != null) {
-        try {
-          const saved: unknown = JSON.parse(localStorage.getItem('watchlist-skipped-' + account.viewerId) ?? '[]');
-          if (Array.isArray(saved)) setSkippedTitles(saved.filter(Number.isInteger));
-        } catch {}
+      if (!account.syncPreferences && account.viewerId != null) {
+        applyPreferences({
+          skipped: storedPreferenceIds(skippedKey(account.viewerId)),
+          lowFanservice: storedPreferenceIds(lowFanserviceKey),
+        });
+        setPreferencesLoaded(true);
       }
       if (account.name) void loadList(); else setLoading(false);
     }).catch(failure => { setError(errorText(failure)); setLoading(false); });
@@ -367,10 +429,16 @@ export default function Watchlist() {
   const selectedMaximum = Math.max(selectedProgress, selectedLimit ?? 0);
   const tracked = new Set(entries.map(entry => entry.media.id));
   const skipped = new Set(skippedTitles);
-  const visibleRecommendations = recommendations?.items.filter(({ media, fanservice }) =>
-    !tracked.has(media.id) && (showSkipped ? skipped.has(media.id) :
+  const newRecommendations = recommendations?.items.filter(({ media }) => !tracked.has(media.id)) ?? [];
+  const genreOptions = [...new Set([
+    ...newRecommendations.filter(({ media }) => !skipped.has(media.id)).flatMap(({ media }) => media.genres ?? []),
+    ...(genreFilter ? [genreFilter] : []),
+  ])].sort((a, b) => a.localeCompare(b));
+  const visibleRecommendations = newRecommendations.filter(({ media, fanservice }) =>
+    showSkipped ? skipped.has(media.id) :
       !skipped.has(media.id) && (airingFilter === 'all' || media.status === airingFilter) &&
-      (!lowOnly || fanservice !== 'flagged' && lowTitles.includes(media.id)))) ?? [];
+      (!genreFilter || media.genres?.includes(genreFilter)) &&
+      (!lowOnly || fanservice !== 'flagged' && lowTitles.includes(media.id)));
   const scheduleDays = new Map<string, ScheduledEpisode[]>();
   for (const item of scheduled ?? []) {
     if (item.airingAt * 1000 <= Date.now() || (trackedOnly && !tracked.has(item.media.id))) continue;
@@ -412,6 +480,7 @@ export default function Watchlist() {
           onClick={() => setView('watchlist')}><ControlLabel icon="all">Watchlist</ControlLabel></button>
         <button className={styles.secondary} title="For You" aria-pressed={view === 'recommendations'} onClick={() => {
           setView('recommendations');
+          void syncPreferences();
           if (!recommendations && !loadingRecommendations) void loadRecommendations();
         }}><ControlLabel icon="sparkle">For You</ControlLabel></button>
         <button className={styles.secondary} title="Schedule" aria-pressed={view === 'schedule'} onClick={() => {
@@ -505,21 +574,28 @@ export default function Watchlist() {
             </div>}
             {!showSkipped && <button type="button" className={styles.filterChip} title="Low fanservice" aria-pressed={lowOnly}
               onClick={() => setLowOnly(value => !value)}><ControlLabel icon="shield">Low fanservice</ControlLabel></button>}
+            {!showSkipped && genreOptions.length > 0 && <select className={styles.genreFilter} aria-label="Genre"
+              value={genreFilter} onChange={event => setGenreFilter(event.target.value)}>
+              <option value="">All genres</option>
+              {genreOptions.map(genre => <option key={genre} value={genre}>{genre}</option>)}
+            </select>}
             {(skippedTitles.length > 0 || showSkipped) && <button type="button" className={styles.filterChip}
               title="Skipped picks" aria-pressed={showSkipped} onClick={() => setShowSkipped(value => !value)}>
               <ControlLabel icon="restore">Skipped picks</ControlLabel>
             </button>}
             {showSkipped && skippedTitles.length > 0 && <button type="button" className={styles.filterChip}
-              onClick={() => { saveSkipped([]); setShowSkipped(false); setNotice('Restored all skipped picks.'); }}>
+              disabled={syncingPreferences} onClick={() => void restoreSkipped()}>
               Restore all
             </button>}
-            <button className={styles.secondary} title="Refresh picks" disabled={loadingRecommendations}
-              onClick={() => void loadRecommendations()}><ControlLabel icon="refresh">Refresh picks</ControlLabel></button>
+            <button className={styles.secondary} title="Refresh picks" disabled={loadingRecommendations || syncingPreferences}
+              onClick={() => { void loadRecommendations(); void syncPreferences(); }}><ControlLabel icon="refresh">Refresh picks</ControlLabel></button>
+            {preferencesError && <p role="alert">{preferencesError}</p>}
           </div>
           {loadingRecommendations ? <p role="status">Finding recommendations…</p>
             : recommendationError ? <p role="alert">{recommendationError}</p>
+            : !preferencesLoaded ? syncingPreferences && <p role="status">Loading recommendation preferences.</p>
             : !recommendations?.hasSeeds ? <p>Log an episode or finish a show you enjoyed to get your first picks.</p>
-            : !visibleRecommendations.length ? <p>{showSkipped ? 'No skipped picks in these recommendations.' : airingFilter !== 'all' || lowOnly
+            : !visibleRecommendations.length ? <p>{showSkipped ? 'No skipped picks in these recommendations.' : airingFilter !== 'all' || lowOnly || genreFilter
               ? 'No picks match these filters.' : 'No new picks yet. Try again after updating your watchlist.'}</p>
             : <ul className={styles.cards}>{visibleRecommendations.map(({ media, because, fanservice }) => {
               const markedLow = lowTitles.includes(media.id);
@@ -532,7 +608,8 @@ export default function Watchlist() {
                   <div className={styles.fanserviceRow}>
                     <p>{fanserviceLabels[markedLow && fanservice !== 'flagged' ? 'low' : fanservice]}</p>
                     {fanservice !== 'flagged' && <button className={styles.markLow} aria-pressed={markedLow}
-                      title="Mark as low fanservice" onClick={() => toggleLow(media.id)}>
+                      title="Mark as low fanservice" disabled={syncingPreferences} onClick={() =>
+                        void changePreferences({ action: 'set', kind: 'lowFanservice', id: media.id, enabled: !markedLow })}>
                       <ControlLabel icon="shield">Mark as low fanservice</ControlLabel>
                     </button>}
                   </div>
@@ -542,7 +619,8 @@ export default function Watchlist() {
                     aria-label={'Add ' + displayName(media)} disabled={editing || saving !== null}
                     onClick={() => void openEntry(media)}><ControlLabel icon="add">Add to list</ControlLabel></button>}
                   <button className={styles.secondary} title={showSkipped ? 'Restore recommendation' : 'Skip recommendation'}
-                    aria-label={(showSkipped ? 'Restore ' : 'Skip ') + displayName(media)} onClick={() => toggleSkip(media)}>
+                    aria-label={(showSkipped ? 'Restore ' : 'Skip ') + displayName(media)}
+                    disabled={syncingPreferences} onClick={() => void toggleSkip(media)}>
                     <ControlLabel icon={showSkipped ? 'restore' : 'dropped'}>{showSkipped ? 'Restore' : 'Skip'}</ControlLabel>
                   </button>
                 </div>

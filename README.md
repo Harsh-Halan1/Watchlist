@@ -27,7 +27,7 @@ Use the sun or moon button in the header to switch themes. The app starts with y
 
 Open **For You** after connecting AniList. Picks come from community recommendations for up to six titles you’ve started or completed. The tracker prioritizes higher personal scores and skips titles you rated under 70 out of 100, dropped titles, and titles you haven’t started. It excludes adult titles and anything already on your watchlist. Use **Refresh picks** after updating your AniList history or ratings.
 
-Use **Airing now** or **Finished airing** to filter by AniList’s release status. AniList tags can flag sexual content, but a missing tag leaves the fanservice level unknown. If you know a pick has low fanservice, mark it on its card. **Low fanservice** shows those marks on the current browser.
+Use **Airing now** or **Finished airing** to filter by AniList's release status. AniList tags can flag sexual content, but a missing tag leaves the fanservice level unknown. If you know a pick has low fanservice, mark it on its card. **Low fanservice** shows those marks. When account sync is enabled, the tracker syncs low fanservice marks and skipped picks when you open **For You** or choose **Refresh picks**.
 
 Select a poster in the watchlist, search results, or **For You** to see a larger image, genres, the AniList community score, and the synopsis when available. Choose **Read more** to expand a long synopsis.
 
@@ -61,6 +61,25 @@ node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 ```
 
 Open the canonical production URL, request a link, open it, and select **Continue**. Then connect AniList. Each browser needs its own sign-in and AniList connection. Sessions last seven days and survive server restarts while the same session secret is configured. Progress is shared through AniList. The existing local setup continues to use AniList directly when the owner sign-in variables are unset.
+
+## Enable recommendation sync
+
+1. In the same Firebase project used for sign-in, create the default **Cloud Firestore** database in production mode. Find your account's UID under **Authentication → Users**.
+2. In **Firestore Database → Rules**, add this match block inside `match /databases/{database}/documents` and replace `YOUR_FIREBASE_UID` with that UID. Publish the rules.
+
+```text
+match /watchlistOwners/{uid}/recommendationPreferences/{viewerId} {
+  allow get, create, update: if request.auth != null
+    && request.auth.uid == uid
+    && uid == "YOUR_FIREBASE_UID"
+    && request.auth.token.email_verified == true;
+}
+```
+
+3. Add `FIREBASE_PROJECT_ID` to the Vercel production environment using the **Project ID** from Firebase project settings, then redeploy.
+4. Sign out and sign in again on each browser with an existing session, reconnect AniList, and open **For You**. The tracker imports each browser's existing skips and low fanservice marks on its first successful sync. Changes saved to your account take precedence over older browser marks.
+
+Without `FIREBASE_PROJECT_ID`, preferences stay in browser storage, including in demo mode.
 
 ## Set an owner password
 
